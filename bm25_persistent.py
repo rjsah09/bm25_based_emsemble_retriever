@@ -1,5 +1,6 @@
 import pickle
 import uuid
+import math
 from pathlib import Path
 from langchain_community.retrievers import BM25Retriever
 from langchain_core.documents import Document
@@ -28,17 +29,17 @@ class BM25Persistent:
                 self.collection: list[dict] = pickle.load(f)
 
         self._retriever = None
-        self._build_retriever()
+        self._build_retriever(k=50)
 
     # READ
-    def retrieve(self, query, k: int = 50):
+    def retrieve(self, query):
         if not query or not self.collection:
             print("query 또는 collection이 없습니다.")
             return []
 
         # 쿼리도 토크나이징 적용
         tokenized_query = self._tokenize_text(query)
-        chunks = self._retriever.get_relevant_documents(tokenized_query.upper())[:k]
+        chunks = self._retriever.get_relevant_documents(tokenized_query.upper(), k=k)
         out = []
 
         for d in chunks:
@@ -82,7 +83,7 @@ class BM25Persistent:
             self.collection.extend(new_documents)
 
             # pickle 파일로 저장
-            self.remove(new_documents[0]["file_name"])
+            # self.remove(new_documents[0]["file_name"])
             with open(self.pickle_path, "wb") as f:
                 pickle.dump(self.collection, f)
 
@@ -130,12 +131,12 @@ class BM25Persistent:
                         all_saved_documents.extend(saved_docs)
                         successful_files += 1
                         print(
-                            f"  ✓ {pptx_file.name} 처리 완료 ({len(saved_docs)}개 슬라이드)"
+                            f"{pptx_file.name} 처리 완료 ({len(saved_docs)}개 슬라이드)"
                         )
                     else:
-                        print(f"  ✗ {pptx_file.name} 처리 실패")
+                        print(f"{pptx_file.name} 처리 실패")
                 except Exception as e:
-                    print(f"  ✗ {pptx_file.name} 처리 중 오류: {e}")
+                    print(f"{pptx_file.name} 처리 중 오류: {e}")
 
             print(f"\n전체 처리 완료: {successful_files}/{len(pptx_files)}개 파일 성공")
             print(f"총 {len(all_saved_documents)}개 슬라이드가 저장되었습니다.")
@@ -207,7 +208,7 @@ class BM25Persistent:
             print(f"전체 데이터 삭제 중 오류 발생: {e}")
             return 0
 
-    def _build_retriever(self) -> None:
+    def _build_retriever(self, k: int = 50) -> None:
         """collection으로 LangChain BM25Retriever 구성."""
         if not self.collection:
             self._retriever = None
@@ -219,7 +220,7 @@ class BM25Persistent:
                 d.get("upper_content") or d.get("tokenized_content", "").upper() or ""
             )
             documents.append(Document(page_content=page_content, metadata=d))
-        self._retriever = BM25Retriever.from_documents(documents)
+        self._retriever = BM25Retriever.from_documents(documents, k=50)
 
     def _tokenize_text(self, text: str) -> str:
         """kiwipiepy를 사용하여 한국어 텍스트를 토크나이징"""
@@ -268,26 +269,59 @@ class BM25Persistent:
         if not query_tokens or not doc_tokens:
             return 0.0
 
-        # 간단한 TF-IDF 기반 점수 계산
+        # 전체 문서 집합에서 IDF 계산을 위한 준비
+        total_docs = len(self.collection)
+        if total_docs == 0:
+            return 0.0
+
+        # 각 문서의 토큰화된 내용을 수집
+        all_docs_tokens = []
+        for doc in self.collection:
+            tokenized_content = doc.get("tokenized_content", "")
+            if tokenized_content:
+                all_docs_tokens.append(tokenized_content.lower().split())
+
+        # 현재 문서의 토큰 빈도 계산
         doc_token_count = {}
         for token in doc_tokens:
             doc_token_count[token] = doc_token_count.get(token, 0) + 1
 
-        # BM25 스코어 계산 (간소화된 버전)
+        # BM25 스코어 계산
         k1 = 1.2
         b = 0.75
-        avg_doc_length = len(doc_tokens)
+        doc_length = len(doc_tokens)
+
+        # 전체 문서의 평균 길이 계산
+        if all_docs_tokens:
+            avg_doc_length = sum(len(tokens) for tokens in all_docs_tokens) / len(
+                all_docs_tokens
+            )
+        else:
+            avg_doc_length = doc_length
 
         score = 0.0
         for term in query_tokens:
             if term in doc_token_count:
                 tf = doc_token_count[term]
-                # 간단한 IDF 계산 (실제로는 전체 문서 집합에서 계산해야 함)
-                idf = 1.0  # 실제 구현에서는 전체 문서 집합에서 계산
+
+                # TF
+                docs_containing_term = 0
+                for tokens in all_docs_tokens:
+                    if term in tokens:
+                        docs_containing_term += 1
+
+                # IDF
+                if docs_containing_term > 0:
+                    idf = math.log(
+                        (total_docs - docs_containing_term + 0.5)
+                        / (docs_containing_term + 0.5)
+                    )
+                else:
+                    idf = 0.0
 
                 # BM25 공식
                 numerator = tf * (k1 + 1)
-                denominator = tf + k1 * (1 - b + b * (avg_doc_length / avg_doc_length))
+                denominator = tf + k1 * (1 - b + b * (doc_length / avg_doc_length))
                 score += idf * (numerator / denominator)
 
         # 0-1 범위로 정규화

@@ -1,13 +1,8 @@
 class EnsembleRetriever:
     def __init__(self, retrievers: list[dict]):
-        # retrievers: list[dict]
-        # {
-        #     "retriever": Object,
-        #      "weight": float, # 0.0 ~ 1.0
-        # }
         self.retrievers = retrievers
 
-    def retrieve(self, query: str, k: int = 50):
+    def retrieve(self, query: str):
         # 각 retriever에서 검색 결과 수집
         all_results = []
 
@@ -16,7 +11,8 @@ class EnsembleRetriever:
             weight = retriever_config["weight"]
 
             # 각 retriever에서 검색 수행
-            results = retriever.retrieve(query, k)
+            results = retriever.retrieve(query)
+            print(results)
 
             # 가중치를 각 결과에 적용
             for result in results:
