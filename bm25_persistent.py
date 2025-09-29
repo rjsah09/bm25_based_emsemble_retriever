@@ -39,7 +39,7 @@ class BM25Persistent:
 
         # 쿼리도 토크나이징 적용
         tokenized_query = self._tokenize_text(query)
-        chunks = self._retriever.get_relevant_documents(tokenized_query.upper(), k=k)
+        chunks = self._retriever.get_relevant_documents(tokenized_query.upper())
         out = []
 
         for d in chunks:

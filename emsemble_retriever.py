@@ -52,7 +52,7 @@ class EnsembleRetriever:
         )
 
         # 상위 k개 결과 반환
-        return sorted_results[:k]
+        return sorted_results
 
     def get(self, query: str, k: int = 50):
         pass  # TODO: 추후 구현 예정
