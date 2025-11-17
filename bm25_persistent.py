@@ -41,7 +41,10 @@ class BM25Persistent:
 
     # READ
     def retrieve(
-        self, query: str, k: Optional[int] = 50, normalize_scores: bool = False
+        self,
+        query: str,
+        k: Optional[int] = 50,
+        apply_coordination: bool = False,
     ) -> List[Dict]:
         if not query or not self.collection:
             print("query 또는 collection이 없습니다.")
@@ -57,19 +60,61 @@ class BM25Persistent:
         if not tokenized_query:
             return []
 
+        # 쿼리 단어 집합 생성 (중복 제거)
+        query_words_set = set(tokenized_query)
+        query_word_count = len(query_words_set)
+
         scores = self._bm25.get_scores(tokenized_query)
         if scores.size == 0:
             return []
 
-        top_idx = heapq.nlargest(k, range(len(scores)), key=scores.__getitem__)
+        # Coordination 점수 계산 및 BM25 점수와 결합
+        combined_scores = []
+        for idx in range(len(scores)):
+            bm25_score = float(scores[idx])
 
-        sel_scores = [float(scores[i]) for i in top_idx]
-        if normalize_scores and len(sel_scores) > 0:
+            if apply_coordination and query_word_count > 0:
+                # 문서의 토큰화된 내용 가져오기
+                doc_id = self._doc_ids[idx]
+                doc = self._doc_by_id.get(doc_id)
+                if doc:
+                    tokenized_content = doc.get("tokenized_content", "")
+                    if isinstance(tokenized_content, list):
+                        tokenized_content = " ".join(tokenized_content)
+                    doc_words_set = set(tokenized_content.upper().split())
+
+                    # Coordination 계산: 쿼리 단어 중 문서에 포함된 단어의 비율
+                    matched_words = query_words_set.intersection(doc_words_set)
+                    coordination_score = len(matched_words) / query_word_count
+
+                    # 예: coordination 0.01 차이 = 1000 점 차이 → BM25 전체 범위를 압도
+                    COORDINATION_SCALE = 100.0  # coordination에 곱할 큰 스케일
+                    combined_score = (
+                        coordination_score * COORDINATION_SCALE + bm25_score
+                    )
+                else:
+                    coordination_score = 0.0
+                    combined_score = bm25_score
+            else:
+                combined_score = bm25_score
+
+            combined_scores.append(combined_score)
+
+        top_idx = heapq.nlargest(
+            k, range(len(combined_scores)), key=combined_scores.__getitem__
+        )
+
+        sel_scores = [combined_scores[i] for i in top_idx]
+
+        # 항상 0~100 범위로 정규화 (apply_coordination 여부와 관계없이)
+        if len(sel_scores) > 0:
             mn, mx = min(sel_scores), max(sel_scores)
             if mx > mn:
-                sel_scores = [(s - mn) / (mx - mn) for s in sel_scores]
+                # Min-Max 정규화를 0~100 범위로 스케일링
+                sel_scores = [((s - mn) / (mx - mn)) * 100.0 for s in sel_scores]
             else:
-                sel_scores = [1.0 for _ in sel_scores]
+                # 모든 점수가 같으면 100점으로 설정
+                sel_scores = [100.0 for _ in sel_scores]
 
         out: List[Dict] = []
         for rank, (idx, s) in enumerate(zip(top_idx, sel_scores), start=1):
@@ -81,6 +126,22 @@ class BM25Persistent:
             item = dict(d)
             item["similarity"] = float(s)
             item["rank"] = rank
+
+            # coordination 점수도 함께 저장 (디버깅/분석용)
+            if apply_coordination and query_word_count > 0:
+                tokenized_content = d.get("tokenized_content", "")
+                if isinstance(tokenized_content, list):
+                    tokenized_content = " ".join(tokenized_content)
+                doc_words_set = set(tokenized_content.upper().split())
+                matched_words = query_words_set.intersection(doc_words_set)
+
+                coordination_score = len(matched_words) / query_word_count
+                item["coordination"] = coordination_score
+                item["matched_query_words"] = len(matched_words)
+                item["total_query_words"] = query_word_count
+                # 디버깅용으로 원래 BM25 점수도 보고 싶으면:
+                item["bm25_score"] = float(scores[idx])
+
             out.append(item)
 
         return out
