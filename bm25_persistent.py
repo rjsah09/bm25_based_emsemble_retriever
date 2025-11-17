@@ -88,7 +88,7 @@ class BM25Persistent:
                     coordination_score = len(matched_words) / query_word_count
 
                     # 예: coordination 0.01 차이 = 1000 점 차이 → BM25 전체 범위를 압도
-                    COORDINATION_SCALE = 100.0  # coordination에 곱할 큰 스케일
+                    COORDINATION_SCALE = 1000.0  # coordination에 곱할 큰 스케일
                     combined_score = (
                         coordination_score * COORDINATION_SCALE + bm25_score
                     )
