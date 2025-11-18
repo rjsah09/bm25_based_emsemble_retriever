@@ -83,12 +83,11 @@ class BM25Persistent:
                         tokenized_content = " ".join(tokenized_content)
                     doc_words_set = set(tokenized_content.upper().split())
 
-                    # Coordination 계산: 쿼리 단어 중 문서에 포함된 단어의 비율
+                    # Coordination 계산
                     matched_words = query_words_set.intersection(doc_words_set)
                     coordination_score = len(matched_words) / query_word_count
 
-                    # 예: coordination 0.01 차이 = 1000 점 차이 → BM25 전체 범위를 압도
-                    COORDINATION_SCALE = 1000.0  # coordination에 곱할 큰 스케일
+                    COORDINATION_SCALE = 1000.0  # coordination에 곱할 스케일
                     combined_score = (
                         coordination_score * COORDINATION_SCALE + bm25_score
                     )
