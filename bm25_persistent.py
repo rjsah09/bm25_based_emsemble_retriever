@@ -7,6 +7,7 @@ from typing import Iterable, List, Dict, Tuple, Optional
 from rank_bm25 import BM25Okapi
 from kiwipiepy import Kiwi
 from kiwipiepy.utils import Stopwords
+import ahocorasick
 
 # 사용자가 가진 파서 모듈
 from pptx_parser import PPTXParser
@@ -69,23 +70,34 @@ class BM25Persistent:
             return []
 
         # Coordination 점수 계산 및 BM25 점수와 결합
+        # ahocorasick Automaton 생성 (키워드들에 대한 Automaton)
+        automaton = None
+        if apply_coordination and query_word_count > 0:
+            automaton = ahocorasick.Automaton()
+            for keyword in query_words_set:
+                automaton.add_word(keyword, keyword)
+            automaton.make_automaton()
+
         combined_scores = []
         for idx in range(len(scores)):
             bm25_score = float(scores[idx])
 
             if apply_coordination and query_word_count > 0:
-                # 문서의 토큰화된 내용 가져오기
+                # 문서의 원본 내용 가져오기
                 doc_id = self._doc_ids[idx]
                 doc = self._doc_by_id.get(doc_id)
-                if doc:
-                    tokenized_content = doc.get("tokenized_content", "")
-                    if isinstance(tokenized_content, list):
-                        tokenized_content = " ".join(tokenized_content)
-                    doc_words_set = set(tokenized_content.upper().split())
+                if doc and automaton:
+                    original_content = doc.get("original_content", "")
+                    if not isinstance(original_content, str):
+                        original_content = str(original_content)
 
-                    # Coordination 계산
-                    matched_words = query_words_set.intersection(doc_words_set)
-                    coordination_score = len(matched_words) / query_word_count
+                    # ahocorasick을 사용하여 문서에서 매칭되는 키워드 찾기
+                    matched_keywords = set()
+                    for end_index, keyword in automaton.iter(original_content):
+                        matched_keywords.add(keyword)
+
+                    # Coordination 계산: 매칭된 키워드 수 / 전체 쿼리 키워드 수
+                    coordination_score = len(matched_keywords) / query_word_count
 
                     COORDINATION_SCALE = 1000.0  # coordination에 곱할 스케일
                     combined_score = (
@@ -127,16 +139,19 @@ class BM25Persistent:
             item["rank"] = rank
 
             # coordination 점수도 함께 저장 (디버깅/분석용)
-            if apply_coordination and query_word_count > 0:
-                tokenized_content = d.get("tokenized_content", "")
-                if isinstance(tokenized_content, list):
-                    tokenized_content = " ".join(tokenized_content)
-                doc_words_set = set(tokenized_content.upper().split())
-                matched_words = query_words_set.intersection(doc_words_set)
+            if apply_coordination and query_word_count > 0 and automaton:
+                original_content = d.get("original_content", "")
+                if not isinstance(original_content, str):
+                    original_content = str(original_content)
 
-                coordination_score = len(matched_words) / query_word_count
+                # ahocorasick을 사용하여 문서에서 매칭되는 키워드 찾기
+                matched_keywords = set()
+                for end_index, keyword in automaton.iter(original_content):
+                    matched_keywords.add(keyword)
+
+                coordination_score = len(matched_keywords) / query_word_count
                 item["coordination"] = coordination_score
-                item["matched_query_words"] = len(matched_words)
+                item["matched_query_words"] = len(matched_keywords)
                 item["total_query_words"] = query_word_count
                 # 디버깅용으로 원래 BM25 점수도 보고 싶으면:
                 item["bm25_score"] = float(scores[idx])
