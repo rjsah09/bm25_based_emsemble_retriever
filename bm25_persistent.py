@@ -44,6 +44,7 @@ class BM25Persistent:
     def retrieve(
         self,
         query: str,
+        keywords: List[str] = [],
         k: Optional[int] = 50,
         apply_coordination: bool = False,
     ) -> List[Dict]:
@@ -62,8 +63,8 @@ class BM25Persistent:
             return []
 
         # 쿼리 단어 집합 생성 (중복 제거)
-        query_words_set = set(tokenized_query)
-        query_word_count = len(query_words_set)
+        keywords_set = set(keywords)
+        keywords_count = len(keywords_set)
 
         scores = self._bm25.get_scores(tokenized_query)
         if scores.size == 0:
@@ -72,17 +73,22 @@ class BM25Persistent:
         # Coordination 점수 계산 및 BM25 점수와 결합
         # ahocorasick Automaton 생성 (키워드들에 대한 Automaton)
         automaton = None
-        if apply_coordination and query_word_count > 0:
+        if apply_coordination and keywords_count > 0:
             automaton = ahocorasick.Automaton()
-            for keyword in query_words_set:
+            for keyword in keywords:
                 automaton.add_word(keyword, keyword)
             automaton.make_automaton()
 
         combined_scores = []
+        # coordination 점수와 매칭 정보를 저장 (나중에 재사용)
+        coordination_data = (
+            {}
+        )  # idx -> {"coordination_score": float, "matched_keywords": set}
+
         for idx in range(len(scores)):
             bm25_score = float(scores[idx])
 
-            if apply_coordination and query_word_count > 0:
+            if apply_coordination and keywords_count > 0:
                 # 문서의 원본 내용 가져오기
                 doc_id = self._doc_ids[idx]
                 doc = self._doc_by_id.get(doc_id)
@@ -97,7 +103,13 @@ class BM25Persistent:
                         matched_keywords.add(keyword)
 
                     # Coordination 계산: 매칭된 키워드 수 / 전체 쿼리 키워드 수
-                    coordination_score = len(matched_keywords) / query_word_count
+                    coordination_score = len(matched_keywords) / keywords_count
+
+                    # 나중에 재사용하기 위해 저장
+                    coordination_data[idx] = {
+                        "coordination_score": coordination_score,
+                        "matched_keywords": matched_keywords,
+                    }
 
                     COORDINATION_SCALE = 1000.0  # coordination에 곱할 스케일
                     combined_score = (
@@ -139,21 +151,12 @@ class BM25Persistent:
             item["rank"] = rank
 
             # coordination 점수도 함께 저장 (디버깅/분석용)
-            if apply_coordination and query_word_count > 0 and automaton:
-                original_content = d.get("original_content", "")
-                if not isinstance(original_content, str):
-                    original_content = str(original_content)
-
-                # ahocorasick을 사용하여 문서에서 매칭되는 키워드 찾기
-                matched_keywords = set()
-                for end_index, keyword in automaton.iter(original_content):
-                    matched_keywords.add(keyword)
-
-                coordination_score = len(matched_keywords) / query_word_count
-                item["coordination"] = coordination_score
-                item["matched_query_words"] = len(matched_keywords)
-                item["total_query_words"] = query_word_count
-                # 디버깅용으로 원래 BM25 점수도 보고 싶으면:
+            # 첫 번째 계산에서 저장한 데이터 재사용 (중복 계산 방지)
+            if apply_coordination and keywords_count > 0 and idx in coordination_data:
+                coord_info = coordination_data[idx]
+                item["coordination"] = coord_info["coordination_score"]
+                item["matched_query_words"] = len(coord_info["matched_keywords"])
+                item["total_query_words"] = keywords_count
                 item["bm25_score"] = float(scores[idx])
 
             out.append(item)
@@ -406,8 +409,11 @@ class BM25Persistent:
             "MAJ",
             "SL",
             "SN",
+            "SH",
         }
-        meaningful = [t.form for t in tokens if t.tag in KEEP]
+        meaningful = [t.form for t in tokens]
+
+        print(f"{[[t.form, t.tag] for t in tokens]}")
         return " ".join(meaningful)
 
     def _drop_by_file_names(self, target_file_names: Iterable[str]) -> int:
